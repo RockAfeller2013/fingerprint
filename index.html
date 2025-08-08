@@ -1,0 +1,388 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Click Tracker</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet.js CDN -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- FingerprintJS CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+  <style>
+    #map { height: 400px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body class="bg-gray-100 font-sans">
+  <!-- Consent Popup -->
+  <div id="consentPopup" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+    <div class="bg-white p-6 rounded-lg shadow-lg max-w-md w-full">
+      <h2 class="text-xl font-bold mb-4">We Value Your Privacy</h2>
+      <p class="mb-4">This site collects non-personal data (e.g., browser details, approximate location) to track link clicks, stored locally in your browser. We need your consent for:</p>
+      <ul class="list-disc pl-5 mb-4">
+        <li><label><input type="checkbox" id="geoConsent" checked> Geolocation (approximate location)</label></li>
+        <li><label><input type="checkbox" id="canvasConsent" checked> Canvas Fingerprinting</label></li>
+        <li><label><input type="checkbox" id="webglConsent" checked> WebGL Fingerprinting</label></li>
+      </ul>
+      <div class="flex justify-end space-x-4">
+        <button id="acceptConsent" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Accept</button>
+        <button id="declineConsent" class="bg-gray-300 px-4 py-2 rounded hover:bg-gray-400">Decline</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div id="landingPage" class="container mx-auto p-4">
+    <h1 class="text-3xl font-bold mb-4">Welcome</h1>
+    <p class="mb-4">Your click has been registered. Thank you for visiting!</p>
+    <button id="viewDashboard" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">View Dashboard</button>
+    <a href="#privacy" class="text-blue-500 hover:underline ml-4">Privacy Policy</a>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="dashboard" class="container mx-auto p-4 hidden">
+    <h1 class="text-3xl font-bold mb-4">Click Tracking Dashboard</h1>
+    <div id="passwordPrompt" class="mb-4">
+      <input type="password" id="dashboardPassword" class="border p-2 rounded" placeholder="Enter password">
+      <button id="submitPassword" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Unlock</button>
+    </div>
+    <div id="dashboardContent" class="hidden">
+      <div class="mb-4">
+        <button id="exportData" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Export Data (JSON)</button>
+        <button id="clearData" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 ml-2">Clear Data</button>
+      </div>
+      <div id="stats" class="mb-4">
+        <p>Total Clicks: <span id="totalClicks">0</span></p>
+        <p>Unique Users: <span id="uniqueUsers">0</span></p>
+      </div>
+      <div id="map" class="mb-4"></div>
+      <table class="w-full border-collapse border">
+        <thead>
+          <tr class="bg-gray-200">
+            <th class="border p-2">ID</th>
+            <th class="border p-2">Timestamp</th>
+            <th class="border p-2">Campaign ID</th>
+            <th class="border p-2">IP Address</th>
+            <th class="border p-2">Fingerprint</th>
+            <th class="border p-2">Geolocation</th>
+            <th class="border p-2">User Agent</th>
+            <th class="border p-2">Screen Resolution</th>
+            <th class="border p-2">Timezone</th>
+            <th class="border p-2">Language</th>
+            <th class="border p-2">Referrer</th>
+            <th class="border p-2">Canvas Fingerprint</th>
+            <th class="border p-2">WebGL Fingerprint</th>
+            <th class="border p-2">Device Memory</th>
+            <th class="border p-2">CPU Cores</th>
+            <th class="border p-2">Touch Support</th>
+          </tr>
+        </thead>
+        <tbody id="clickTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Privacy Policy -->
+  <div id="privacy" class="container mx-auto p-4 hidden">
+    <h1 class="text-3xl font-bold mb-4">Privacy Policy</h1>
+    <p class="mb-4">All data collected (e.g., browser details, approximate location) is stored locally in your browser using IndexedDB. No data is sent to a server. You can opt out or delete your data at any time via the dashboard.</p>
+    <button id="optOut" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">Opt Out</button>
+    <a href="#" class="text-blue-500 hover:underline ml-4">Back to Landing</a>
+  </div>
+
+  <script>
+    // Initialize IndexedDB
+    let db;
+    const request = indexedDB.open('ClickTrackerDB', 1);
+    request.onupgradeneeded = (event) => {
+      db = event.target.result;
+      const store = db.createObjectStore('clicks', { keyPath: 'id' });
+      store.createIndex('fingerprint', 'fingerprint', { unique: false });
+      store.createIndex('campaignId', 'campaignId', { unique: false });
+    };
+    request.onsuccess = (event) => {
+      db = event.target.result;
+      initializeApp();
+    };
+
+    async function initializeApp() {
+      // Check consent status
+      const consent = localStorage.getItem('consent');
+      if (!consent) {
+        document.getElementById('consentPopup').classList.remove('hidden');
+      } else {
+        collectData();
+      }
+
+      // Event Listeners
+      document.getElementById('acceptConsent').addEventListener('click', handleConsent.bind(null, true));
+      document.getElementById('declineConsent').addEventListener('click', handleConsent.bind(null, false));
+      document.getElementById('viewDashboard').addEventListener('click', showDashboard);
+      document.getElementById('submitPassword').addEventListener('click', unlockDashboard);
+      document.getElementById('exportData').addEventListener('click', exportData);
+      document.getElementById('clearData').addEventListener('click', clearData);
+      document.getElementById('optOut').addEventListener('click', optOut);
+      document.querySelector('a[href="#privacy"]').addEventListener('click', showPrivacy);
+      document.querySelector('a[href="#"]').addEventListener('click', showLanding);
+    }
+
+    async function handleConsent(accept) {
+      const geoConsent = document.getElementById('geoConsent').checked;
+      const canvasConsent = document.getElementById('canvasConsent').checked;
+      const webglConsent = document.getElementById('webglConsent').checked;
+      localStorage.setItem('consent', JSON.stringify({ accepted: accept, geo: geoConsent, canvas: canvasConsent, webgl: webglConsent }));
+      document.getElementById('consentPopup').classList.add('hidden');
+      if (accept) collectData();
+    }
+
+    async function collectData() {
+      const consent = JSON.parse(localStorage.getItem('consent') || '{}');
+      const clickData = {
+        id: crypto.randomUUID(),
+        timestamp: new Date().toISOString(),
+        campaignId: new URLSearchParams(window.location.search).get('id') || 'default',
+        userAgent: navigator.userAgent,
+        screenResolution: `${window.screen.width}x${window.screen.height}`,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        language: navigator.language,
+        referrer: document.referrer,
+        deviceMemory: navigator.deviceMemory || 'N/A',
+        hardwareConcurrency: navigator.hardwareConcurrency || 'N/A',
+        touchSupport: navigator.maxTouchPoints > 0 ? 'Yes' : 'No'
+      };
+
+      // Fetch IP Address
+      try {
+        const ipResponse = await fetch('https://api.ipify.org?format=json');
+        clickData.ip = (await ipResponse.json()).ip;
+      } catch (e) {
+        clickData.ip = 'N/A';
+      }
+
+      // FingerprintJS
+      const fp = await FingerprintJS.load();
+      const result = await fp.get();
+      clickData.fingerprint = result.visitorId;
+
+      // Canvas Fingerprint
+      if (consent.canvas) {
+        clickData.canvasFingerprint = getCanvasFingerprint();
+      } else {
+        clickData.canvasFingerprint = 'N/A';
+      }
+
+      // WebGL Fingerprint
+      if (consent.webgl) {
+        clickData.webglFingerprint = getWebGLFingerprint();
+      } else {
+        clickData.webglFingerprint = 'N/A';
+      }
+
+      // Geolocation
+      if (consent.geo) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            clickData.geolocation = `${pos.coords.latitude},${pos.coords.longitude}`;
+            saveClickData(clickData);
+          },
+          () => {
+            clickData.geolocation = 'N/A';
+            saveClickData(clickData);
+          }
+        );
+      } else {
+        clickData.geolocation = 'N/A';
+        saveClickData(clickData);
+      }
+    }
+
+    function getCanvasFingerprint() {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      ctx.textBaseline = 'top';
+      ctx.font = '14px Arial';
+      ctx.fillStyle = '#f60';
+      ctx.fillRect(125, 1, 62, 20);
+      ctx.fillStyle = '#069';
+      ctx.fillText('Hello, world!', 2, 15);
+      return canvas.toDataURL();
+    }
+
+    function getWebGLFingerprint() {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl');
+      if (!gl) return 'N/A';
+      const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+      return debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'N/A';
+    }
+
+    function saveClickData(data) {
+      const tx = db.transaction(['clicks'], 'readwrite');
+      const store = tx.objectStore('clicks');
+      store.add(data);
+      tx.oncomplete = () => {
+        console.log('Data saved');
+      };
+    }
+
+    function showDashboard() {
+      document.getElementById('landingPage').classList.add('hidden');
+      document.getElementById('dashboard').classList.remove('hidden');
+    }
+
+    function unlockDashboard() {
+      const password = document.getElementById('dashboardPassword').value;
+      if (password === 'admin123') { // Simple client-side password
+        document.getElementById('passwordPrompt').classList.add('hidden');
+        document.getElementById('dashboardContent').classList.remove('hidden');
+        loadDashboardData();
+      } else {
+        alert('Incorrect password');
+      }
+    }
+
+    function loadDashboardData() {
+      const tx = db.transaction(['clicks'], 'readonly');
+      const store = tx.objectStore('clicks');
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const clicks = request.result;
+        document.getElementById('totalClicks').textContent = clicks.length;
+        const uniqueUsers = new Set(clicks.map(c => c.fingerprint)).size;
+        document.getElementById('uniqueUsers').textContent = uniqueUsers;
+
+        // Populate table
+        const tableBody = document.getElementById('clickTable');
+        tableBody.innerHTML = '';
+        clicks.forEach(click => {
+          const row = document.createElement('tr');
+          row.innerHTML = `
+            <td class="border p-2">${click.id}</td>
+            <td class="border p-2">${click.timestamp}</td>
+            <td class="border p-2">${click.campaignId}</td>
+            <td class="border p-2">${click.ip}</td>
+            <td class="border p-2">${click.fingerprint}</td>
+            <td class="border p-2">${click.geolocation}</td>
+            <td class="border p-2">${click.userAgent}</td>
+            <td class="border p-2">${click.screenResolution}</td>
+            <td class="border p-2">${click.timezone}</td>
+            <td class="border p-2">${click.language}</td>
+            <td class="border p-2">${click.referrer}</td>
+            <td class="border p-2">${click.canvasFingerprint}</td>
+            <td class="border p-2">${click.webglFingerprint}</td>
+            <td class="border p-2">${click.deviceMemory}</td>
+            <td class="border p-2">${click.hardwareConcurrency}</td>
+            <td class="border p-2">${click.touchSupport}</td>
+          `;
+          tableBody.appendChild(row);
+        });
+
+        // Initialize map
+        const map = L.map('map').setView([0, 0], 2);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+        clicks.forEach(click => {
+          if (click.geolocation !== 'N/A') {
+            const [lat, lon] = click.geolocation.split(',');
+            L.marker([lat, lon]).addTo(map).bindPopup(`Click ID: ${click.id}`);
+          }
+        });
+      };
+    }
+
+    function exportData() {
+      const tx = db.transaction(['clicks'], 'readonly');
+      const store = tx.objectStore('clicks');
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const data = JSON.stringify(request.result, null, 2);
+        const blob = new Blob([data], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'click_data.json';
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+    }
+
+    function clearData() {
+      if (confirm('Are you sure you want to clear all data?')) {
+        const tx = db.transaction(['clicks'], 'readwrite');
+        const store = tx.objectStore('clicks');
+        store.clear();
+        tx.oncomplete = () => {
+          loadDashboardData();
+          alert('Data cleared');
+        };
+      }
+    }
+
+    function optOut() {
+      if (confirm('Are you sure you want to opt out and delete all data?')) {
+        localStorage.removeItem('consent');
+        indexedDB.deleteDatabase('ClickTrackerDB');
+        alert('Opted out and data deleted');
+        window.location.reload();
+      }
+    }
+
+    function showPrivacy(e) {
+      e.preventDefault();
+      document.getElementById('landingPage').classList.add('hidden');
+      document.getElementById('dashboard').classList.add('hidden');
+      document.getElementById('privacy').classList.remove('hidden');
+    }
+
+    function showLanding(e) {
+      e.preventDefault();
+      document.getElementById('privacy').classList.add('hidden');
+      document.getElementById('dashboard').classList.add('hidden');
+      document.getElementById('landingPage').classList.remove('hidden');
+    }
+  </script>
+</body>
+</html>
